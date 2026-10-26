@@ -1,0 +1,23 @@
+{
+  "ETV_MAIN_S": {
+    "name": "ETV Telugu",
+    "logo": "https://xstreamcp-assets-msp.streamready.in/assets/LIVETV/LIVECHANNEL/LIVETV_LIVETVCHANNEL_ETV_HD/images/LOGO_HD/image.png",
+    "country": "IN",
+    "lang": "tel",
+    "streams": [
+      ["1080p", "https://mumbai-edge.smartplaytv.in/ETVHD/index.m3u8", "", ""],
+      ["1080p", "https://d37d7pfp7vjqhh.cloudfront.net/v1/master/9d43eacaed199f8d5883927e7aef514a8a08e108/ETV_TS_H264_cloud_in/index.m3u8", "", ""]
+    ],
+    "cats": ["entertainment"]
+  },
+  "ETV_MIRROR_S": {
+    "name": "ETV Telugu (Mirror)",
+    "logo": "https://xstreamcp-assets-msp.streamready.in/assets/LIVETV/LIVECHANNEL/LIVETV_LIVETVCHANNEL_ETV_HD/images/LOGO_HD/image.png",
+    "country": "IN",
+    "lang": "tel",
+    "streams": [
+      ["1080p", "https://d37d7pfp7vjqhh.cloudfront.net/v1/master/9d43eacaed199f8d5883927e7aef514a8a08e108/ETV_TS_H264_cloud_in/index.m3u8", "", ""]
+    ],
+    "cats": ["entertainment"]
+  }
+}

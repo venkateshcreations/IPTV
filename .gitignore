@@ -1,0 +1,9 @@
+# Recon artifacts from the original site (not part of the deployed app)
+RECON/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
