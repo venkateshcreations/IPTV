@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ammi TV Explorer — Free Live TV Channels from India</title>
-<meta name="description" content="Watch 746+ free live TV channels from India. News, sports, movies, music and more — in your browser, no signup.">
+<meta name="description" content="Watch free live TV channels from India — news, sports, movies, music and more, right in your browser. No signup.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -210,7 +210,7 @@ video{width:100%;height:100%;object-fit:contain;background:#000}
         <div class="placeholder" id="placeholder">
           <div>
             <h2>Pick a channel</h2>
-            <p>Select any of the 746+ free live Indian TV channels from the list. Streams play instantly in your browser.</p>
+            <p>Select any free live Indian TV channel from the list. Streams play instantly in your browser.</p>
             <div class="hint">Tip: use search or category chips to find channels. Press F for full screen.</div>
           </div>
         </div>
@@ -218,7 +218,7 @@ video{width:100%;height:100%;object-fit:contain;background:#000}
       <div class="statusbar">
         <span class="dot" id="sdot"></span>
         <span id="stxt">Ready</span>
-        <span style="margin-left:auto">Source: iptv-org · India only · 746 channels</span>
+        <span style="margin-left:auto" id="srcInfo">Source: iptv-org · India · live</span>
       </div>
     </section>
   </div>
@@ -237,40 +237,153 @@ let activeCat='All';
 const video=$('#video');
 
 // ---------- data load ----------
-async function loadChannels(){
-  let j=null;
-  // try live first for freshest streams, fall back to bundled
-  try{
-    const r=await fetch('https://tvexplorer.live/project/data/channels.json',{mode:'cors'});
-    if(r.ok){
-      const full=await r.json();
-      const out={};
-      for(const k of Object.keys(full)){ if(full[k][3]==='IN') out[k]=full[k]; }
-      // enrich categories
-      try{
-        const ci=await fetch('https://iptv-org.github.io/api/channels.json',{mode:'cors'});
-        if(ci.ok){ const iptv=await ci.json(); const m={}; for(const c of iptv){ if(c.country==='IN') m[c.name.toLowerCase()]=c.categories||[]; } for(const k of Object.keys(out)){ const cats=m[out[k][0].toLowerCase()]; if(cats) out[k].cats=cats; else out[k].cats=[]; } }
-      }catch{}
-      // normalize to bundled shape
-      const norm={};
-      for(const k of Object.keys(out)){ const v=out[k]; norm[k]={name:v[0],logo:v[1],country:v[3],lang:v[4],streams:(v[5]||[]).map(s=>[s[0],s[1]]),cats:v.cats||[]}; }
-      j=norm;
+const LIVE_M3U='https://iptv-org.github.io/iptv/countries/in.m3u';
+const LIVE_STREAMS='https://iptv-org.github.io/api/streams.json';
+let sourceLabel='Source: iptv-org · India · live';
+let liveEntries=null;
+
+function isHttps(url){ return /^https:\/\//i.test(url||''); }
+function normKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,''); }
+function parseCats(s){
+  return String(s||'').split(';').map(x=>x.trim().toLowerCase())
+    .filter(x=>x && x!=='undefined');
+}
+function usableStreams(list){
+  const httpsOnly=location.protocol==='https:';
+  const seen=new Set();
+  return (list||[]).filter(s=>{
+    if(!s||!s.url) return false;
+    if(seen.has(s.url)) return false;
+    if(httpsOnly && !isHttps(s.url)) return false;
+    seen.add(s.url);
+    return true;
+  }).sort((a,b)=>Number(isHttps(b.url))-Number(isHttps(a.url)));
+}
+function parseM3U(text){
+  const out=[]; let cur=null;
+  for(const raw of String(text||'').split(/\r?\n/)){
+    const line=raw.trim();
+    if(!line) continue;
+    if(line.startsWith('#EXTINF')){
+      const attrs={};
+      line.replace(/([\w-]+)="([^"]*)"/g,(m,k,v)=>{attrs[k]=v;return '';});
+      const display=(line.split(',').slice(1).join(',')||'').trim();
+      const qm=display.match(/\((\d{3,4}p|4K|8K|HD|SD|FHD|UHD)\)\s*$/i);
+      const quality=qm?qm[1]:'';
+      const name=display.replace(/\s*\((?:\d{3,4}p|4K|8K|HD|SD|FHD|UHD)\)\s*$/i,'').trim()||display;
+      cur={id:attrs['tvg-id']||'',name,logo:attrs['tvg-logo']||'',quality,cats:parseCats(attrs['group-title'])};
+    }else if(!line.startsWith('#')&&cur){
+      out.push({...cur,url:line});
+      cur=null;
     }
-  }catch(e){ console.warn('live fetch failed, using bundled',e); }
-  if(!j){
-    try{ const r=await fetch('assets/data/india-channels.json'); j=await r.json(); }catch(e){ console.error(e); }
   }
-  if(!j){ $('#count').textContent='Failed to load'; toast('Could not load channel data'); return; }
-  channels=Object.entries(j).map(([key,v])=>({
-      key, name:v.name, logo:v.logo, country:v.country, lang:v.lang,
-      streams:(v.streams||[]).map(s=>({q:s[0],url:s[1]})),
-      cats:v.cats||[], fav:isFav(key)
-    }));
-    channels.sort((a,b)=>a.name.localeCompare(b.name));
-    buildCats();
-    renderList();
-    $('#count').textContent=channels.length+' channels';
-    toast('Loaded '+channels.length+' Indian channels');
+  return out;
+}
+async function fetchTimed(url,ms){
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),ms);
+  try{ return await fetch(url,{cache:'no-cache',signal:ctrl.signal}); }
+  finally{ clearTimeout(t); }
+}
+function extrasByChannel(streamData){
+  const map=new Map();
+  if(!Array.isArray(streamData)) return map;
+  for(const s of streamData){
+    if(!s||!s.channel||!s.url) continue;
+    if(!map.has(s.channel)) map.set(s.channel,[]);
+    map.get(s.channel).push({q:s.quality||'',url:s.url});
+  }
+  return map;
+}
+function buildLiveChannels(entries,extras){
+  const map=new Map();
+  for(const e of entries){
+    const key=(e.id||'').replace(/@.*$/,'')||normKey(e.name);
+    let c=map.get(key);
+    if(!c){
+      c={key,name:e.name,logo:e.logo||'',country:'IN',lang:'',streams:[],cats:[],fav:isFav(key)};
+      map.set(key,c);
+    }
+    if(!c.logo&&e.logo) c.logo=e.logo;
+    for(const cat of e.cats) if(!c.cats.includes(cat)) c.cats.push(cat);
+    c.streams.push({q:e.quality||'',url:e.url});
+  }
+  for(const c of map.values()){
+    c.streams=usableStreams(c.streams.concat((extras&&extras.get(c.key))||[]));
+  }
+  return Array.from(map.values()).filter(c=>c.streams.length);
+}
+function buildBundledChannels(j){
+  return Object.entries(j).map(([key,v])=>({
+    key,name:v.name,logo:v.logo||'',country:v.country||'IN',lang:v.lang||'',
+    streams:usableStreams((v.streams||[]).map(s=>({q:s[0],url:s[1]}))),
+    cats:(v.cats||[]).map(x=>String(x).toLowerCase()).filter(Boolean),
+    fav:isFav(key)
+  })).filter(c=>c.streams.length);
+}
+function finishLoad(){
+  if(!channels.length){ $('#count').textContent='Failed to load'; toast('Could not load channel data'); return; }
+  channels.sort((a,b)=>a.name.localeCompare(b.name));
+  buildCats();
+  renderList();
+  $('#count').textContent=channels.length+' channels';
+  $('#srcInfo').textContent=sourceLabel+' · '+channels.length+' channels';
+  toast('Loaded '+channels.length+' live Indian channels');
+}
+async function refreshChannels(extras){
+  const currentKey=current&&current.key;
+  const currentUrl=current&&current.streams[streamIdx]&&current.streams[streamIdx].url;
+  const list=$('#list');
+  const scrollTop=list?list.scrollTop:0;
+  channels=buildLiveChannels(liveEntries,extras);
+  channels.sort((a,b)=>a.name.localeCompare(b.name));
+  if(currentKey){
+    const next=channels.find(c=>c.key===currentKey);
+    if(next){
+      current=next;
+      const idx=next.streams.findIndex(s=>s.url===currentUrl);
+      if(idx>=0) streamIdx=idx;
+      else if(streamIdx>=next.streams.length) streamIdx=0;
+      updateStreamSel();
+    }
+  }
+  buildCats();
+  renderList();
+  if(list) list.scrollTop=scrollTop;
+  $('#count').textContent=channels.length+' channels';
+  $('#srcInfo').textContent=sourceLabel+' · '+channels.length+' channels';
+}
+async function loadFallbackStreams(){
+  if(!liveEntries||!liveEntries.length) return;
+  try{
+    const r=await fetchTimed(LIVE_STREAMS,20000);
+    if(!r.ok) return;
+    const data=await r.json();
+    await refreshChannels(extrasByChannel(data));
+  }catch(e){ console.warn('Fallback stream list unavailable',e); }
+}
+async function loadChannels(){
+  let entries=null;
+  try{
+    const r=await fetchTimed(LIVE_M3U,12000);
+    if(r.ok) entries=parseM3U(await r.text());
+  }catch(e){ console.warn('Live source unavailable',e); }
+
+  if(entries&&entries.length){
+    liveEntries=entries;
+    channels=buildLiveChannels(entries);
+    sourceLabel='Source: iptv-org · India · live';
+    finishLoad();
+    loadFallbackStreams();
+  }else{
+    liveEntries=null;
+    try{
+      const r=await fetch('assets/data/india-channels.json',{cache:'no-cache'});
+      channels=buildBundledChannels(await r.json());
+      sourceLabel='Source: bundled snapshot (live unavailable)';
+      finishLoad();
+    }catch(e){ console.error(e); finishLoad(); }
+  }
 }
 function isFav(key){ try{return JSON.parse(localStorage.getItem('fav')||'[]').includes(key)}catch{return false} }
 function setFav(key,on){
@@ -426,7 +539,10 @@ document.addEventListener('fullscreenchange',()=>{
   $('#fsBtn').textContent=document.fullscreenElement?'Exit full screen':'Full screen';
 });
 document.addEventListener('keydown',e=>{
-  if(e.key==='f'||e.key==='F'){ if(document.activeElement.tagName!=='INPUT') toggleFs(); }
+  const el=e.target;
+  const typing=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);
+  if(typing) return;
+  if(e.key==='f'||e.key==='F'){ toggleFs(); }
   if(e.key===' '){ e.preventDefault(); if(video.paused) video.play(); else video.pause(); }
   if(e.key==='m'||e.key==='M'){ video.muted=!video.muted; $('#muteBtn').textContent=video.muted?'🔇':'🔊'; }
   if(e.key==='ArrowUp'){ video.volume=Math.min(1,video.volume+0.1); $('#vol').value=video.volume; }
