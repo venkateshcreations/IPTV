@@ -254,7 +254,6 @@ function usableStreams(list){
   return (list||[]).filter(s=>{
     if(!s||!s.url) return false;
     if(seen.has(s.url)) return false;
-    if(httpsOnly && !isHttps(s.url)) return false;
     seen.add(s.url);
     return true;
   }).sort((a,b)=>Number(isHttps(b.url))-Number(isHttps(a.url)));
@@ -468,7 +467,10 @@ function updateStreamSel(){
 }
 function playStream(s){
   if(!s){ setStatus('No stream available','err'); return; }
-  const url=s.url;
+  let url=s.url;
+  if(location.protocol==='https:' && !isHttps(url)) {
+    url = PROXY_URL + encodeURIComponent(url);
+  }
   if(hls){ hls.destroy(); hls=null; }
   video.pause(); video.removeAttribute('src'); video.load();
   if(Hls.isSupported()){
