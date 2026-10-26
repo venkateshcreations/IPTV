@@ -369,21 +369,28 @@ async function loadChannels(){
     const r=await fetchTimed(LIVE_M3U,12000);
     if(r.ok) entries=parseM3U(await r.text());
   }catch(e){ console.warn('Live source unavailable',e); }
+  
+  let bundled=[];
+  try{
+    const r=await fetch('assets/data/india-channels.json',{cache:'no-cache'});
+    bundled=buildBundledChannels(await r.json());
+  }catch(e){ console.error('Bundled data unavailable',e); }
 
   if(entries&&entries.length){
     liveEntries=entries;
     channels=buildLiveChannels(entries);
     sourceLabel='Source: iptv-org · India · live';
+    // Merge bundled channels that aren't already present or are explicit mirrors
+    bundled.forEach(bc=>{
+      if(!channels.find(c=>c.key===bc.key)) channels.push(bc);
+    });
     finishLoad();
     loadFallbackStreams();
   }else{
     liveEntries=null;
-    try{
-      const r=await fetch('assets/data/india-channels.json',{cache:'no-cache'});
-      channels=buildBundledChannels(await r.json());
-      sourceLabel='Source: bundled snapshot (live unavailable)';
-      finishLoad();
-    }catch(e){ console.error(e); finishLoad(); }
+    channels=bundled;
+    sourceLabel='Source: bundled snapshot (live unavailable)';
+    finishLoad();
   }
 }
 function isFav(key){ try{return JSON.parse(localStorage.getItem('fav')||'[]').includes(key)}catch{return false} }
