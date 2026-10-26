@@ -230,6 +230,7 @@ video{width:100%;height:100%;object-fit:contain;background:#000}
 <script>
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
+const PROXY_URL='https://corsproxy.io/?';
 let channels=[]; // {key,name,logo,country,lang,streams:[{q,url}],cats:[],fav}
 let hls=null;
 let current=null;
