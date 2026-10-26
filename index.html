@@ -388,8 +388,11 @@ async function loadChannels(){
     sourceLabel='Source: iptv-org · India · live';
     
     // Merge bundled and ETV channels to ensure they always appear
-    [...bundled, ...etv].forEach(bc=>{
+    bundled.forEach(bc=>{
       if(!channels.find(c=>c.key===bc.key)) channels.push(bc);
+    });
+    etv.forEach(ec=>{
+      channels.push(ec);
     });
     finishLoad();
     loadFallbackStreams();

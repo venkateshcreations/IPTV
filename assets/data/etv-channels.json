@@ -1,5 +1,5 @@
 {
-  "ETVTelugu.in.HD": {
+  "ETV_MAIN_S": {
     "name": "ETV Telugu",
     "logo": "https://xstreamcp-assets-msp.streamready.in/assets/LIVETV/LIVECHANNEL/LIVETV_LIVETVCHANNEL_ETV_HD/images/LOGO_HD/image.png",
     "country": "IN",
@@ -10,7 +10,7 @@
     ],
     "cats": ["entertainment"]
   },
-  "ETVTelugu.in.Mirror": {
+  "ETV_MIRROR_S": {
     "name": "ETV Telugu (Mirror)",
     "logo": "https://xstreamcp-assets-msp.streamready.in/assets/LIVETV/LIVECHANNEL/LIVETV_LIVETVCHANNEL_ETV_HD/images/LOGO_HD/image.png",
     "country": "IN",
