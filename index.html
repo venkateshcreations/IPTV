@@ -336,7 +336,9 @@ async function refreshChannels(extras){
   const currentUrl=current&&current.streams[streamIdx]&&current.streams[streamIdx].url;
   const list=$('#list');
   const scrollTop=list?list.scrollTop:0;
-  channels=buildLiveChannels(liveEntries,extras);
+  const live=buildLiveChannels(liveEntries,extras);
+  const bundled=channels.filter(c=>!live.find(l=>l.key===c.key));
+  channels=[...live,...bundled];
   channels.sort((a,b)=>a.name.localeCompare(b.name));
   if(currentKey){
     const next=channels.find(c=>c.key===currentKey);
