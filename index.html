@@ -164,6 +164,16 @@ video{width:100%;height:100%;object-fit:contain;background:#000}
     </div>
     <div class="top-actions">
       <button class="btn mobile-toggle" id="toggleList" title="Channels">☰</button>
+      <select id="prefQuality" title="Preferred quality" style="padding:8px 10px;border-radius:8px;background:var(--surface);color:var(--fg);border:1px solid var(--border);font-size:12px">
+        <option value="auto">Auto</option>
+        <option value="2160">4K</option>
+        <option value="1080">1080p</option>
+        <option value="720">720p</option>
+        <option value="540">540p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+        <option value="240">240p</option>
+      </select>
       <button class="btn" id="favFilter" title="Favorites">♥ Favorites</button>
       <button class="btn primary" id="fsBtn" title="Fullscreen">Full screen</button>
     </div>
@@ -236,29 +246,52 @@ let hls=null;
 let current=null;
 let favOnly=false;
 let activeCat='All';
+let preferredQuality='auto';
+try{ preferredQuality=localStorage.getItem('prefQuality')||'auto'; }catch{}
 const video=$('#video');
 
 // ---------- data load ----------
 const LIVE_M3U='https://iptv-org.github.io/iptv/countries/in.m3u';
 const LIVE_STREAMS='https://iptv-org.github.io/api/streams.json';
+const WORLDWIDE_M3U='worldwide_channels.m3u';
 let sourceLabel='Source: iptv-org · India · live';
 let liveEntries=null;
 
 function isHttps(url){ return /^https:\/\//i.test(url||''); }
 function normKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,''); }
+function isTeluguIndianEntry(e,teluguNames){
+  const id=String((e&&e.id)||''); const name=String((e&&e.name)||'');
+  const indian=/\.in(?:@|$)/i.test(id);
+  if(!indian) return false;
+  if(teluguNames && teluguNames.has(normKey(name))) return true;
+  return /telugu/i.test(id+' '+name);
+}
 function parseCats(s){
   return String(s||'').split(';').map(x=>x.trim().toLowerCase())
     .filter(x=>x && x!=='undefined');
 }
+function qualityRank(q){
+  const s=String(q||'').toLowerCase();
+  if(/8k/.test(s)) return 4320;
+  if(/4k|uhd/.test(s)) return 2160;
+  const m=s.match(/(\d{3,4})/); if(m) return parseInt(m[1],10);
+  if(/fhd/.test(s)) return 1080;
+  if(/hd/.test(s)) return 720;
+  if(/sd/.test(s)) return 480;
+  return 0;
+}
 function usableStreams(list){
-  const httpsOnly=location.protocol==='https:';
   const seen=new Set();
   return (list||[]).filter(s=>{
     if(!s||!s.url) return false;
     if(seen.has(s.url)) return false;
     seen.add(s.url);
     return true;
-  }).sort((a,b)=>Number(isHttps(b.url))-Number(isHttps(a.url)));
+  }).sort((a,b)=>{
+    const h=Number(isHttps(b.url))-Number(isHttps(a.url));
+    if(h) return h;
+    return qualityRank(b.q)-qualityRank(a.q);
+  });
 }
 function parseM3U(text){
   const out=[]; let cur=null;
@@ -322,6 +355,14 @@ function buildBundledChannels(j){
     fav:isFav(key)
   })).filter(c=>c.streams.length);
 }
+async function loadWorldwideChannels(teluguNames){
+  try{
+    const r=await fetchTimed(WORLDWIDE_M3U,60000);
+    if(!r.ok) return [];
+    const entries=parseM3U(await r.text()).filter(e=>!isTeluguIndianEntry(e,teluguNames));
+    return buildLiveChannels(entries);
+  }catch(e){ console.warn('Worldwide channels unavailable',e); return []; }
+}
 function finishLoad(){
   if(!channels.length){ $('#count').textContent='Failed to load'; toast('Could not load channel data'); return; }
   channels.sort((a,b)=>a.name.localeCompare(b.name));
@@ -329,7 +370,7 @@ function finishLoad(){
   renderList();
   $('#count').textContent=channels.length+' channels';
   $('#srcInfo').textContent=sourceLabel+' · '+channels.length+' channels';
-  toast('Loaded '+channels.length+' live Indian channels');
+  toast('Loaded '+channels.length+' channels');
 }
 async function refreshChannels(extras){
   const currentKey=current&&current.key;
@@ -384,23 +425,33 @@ async function loadChannels(){
     etv=buildBundledChannels(await r.json());
   }catch(e){ console.error('ETV data unavailable',e); }
 
+  const teluguNames=new Set([...(bundled||[]),...(etv||[])].filter(c=>c.lang==='tel').map(c=>normKey(c.name)));
+  let worldwide=[];
+  try{ worldwide=await loadWorldwideChannels(teluguNames); }
+  catch(e){ console.error('Worldwide data unavailable',e); }
+
   if(entries&&entries.length){
     liveEntries=entries;
     channels=buildLiveChannels(entries);
     sourceLabel='Source: iptv-org · India · live';
     
-    // Merge bundled and ETV channels to ensure they always appear
+    // Merge bundled, ETV and worldwide channels to ensure they appear
     bundled.forEach(bc=>{
       if(!channels.find(c=>c.key===bc.key)) channels.push(bc);
     });
     etv.forEach(ec=>{
       channels.push(ec);
     });
+    worldwide.forEach(wc=>{
+      if(!channels.find(c=>c.key===wc.key)) channels.push(wc);
+    });
     finishLoad();
     loadFallbackStreams();
   }else{
     liveEntries=null;
-    channels=[...bundled, ...etv];
+    const merged=[...bundled,...etv];
+    worldwide.forEach(wc=>{ if(!merged.find(c=>c.key===wc.key)) merged.push(wc); });
+    channels=merged;
     sourceLabel='Source: bundled snapshot (live unavailable)';
     finishLoad();
   }
@@ -463,8 +514,16 @@ function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;',
 
 // ---------- playback ----------
 let streamIdx=0;
+let stallTimer=null;
+function bestStreamIndex(c,pref){
+  if(!c||!c.streams||!c.streams.length) return 0;
+  if(!pref||pref==='auto') return 0;
+  const max=parseInt(pref,10)||0;
+  const idx=c.streams.findIndex(s=>qualityRank(s.q)<=max);
+  return idx>=0?idx:c.streams.length-1;
+}
 function play(c){
-  current=c; streamIdx=0; c.fav=isFav(c.key);
+  current=c; streamIdx=bestStreamIndex(c,preferredQuality); c.fav=isFav(c.key);
   $('#placeholder').style.display='none';
   $('#npName').textContent=c.name;
   $('#ctrlTitle').textContent=c.name;
@@ -472,7 +531,7 @@ function play(c){
   updateStreamSel();
   renderList();
   setStatus('Loading stream…','loading');
-  playStream(c.streams[0]);
+  playStream(c.streams[streamIdx]);
   $('#sidebar').classList.remove('open');
 }
 function updateStreamSel(){
@@ -487,6 +546,7 @@ function updateStreamSel(){
   sel.value=streamIdx;
 }
 function playStream(s){
+  if(stallTimer){ clearTimeout(stallTimer); stallTimer=null; }
   if(!s){ setStatus('No stream available','err'); return; }
   let url=s.url;
   if(location.protocol==='https:' && !isHttps(url)) {
@@ -533,8 +593,20 @@ function setStatus(t,state){
 $('#playBtn').onclick=()=>{ if(video.paused) video.play(); else video.pause(); };
 video.addEventListener('play',()=>{$('#playBtn').textContent='⏸';$('#spinner').style.display='none';});
 video.addEventListener('pause',()=>$('#playBtn').textContent='▶');
-video.addEventListener('waiting',()=>{$('#spinner').style.display='block';});
-video.addEventListener('playing',()=>{$('#spinner').style.display='none';});
+video.addEventListener('waiting',()=>{$('#spinner').style.display='block';
+  if(stallTimer) return;
+  stallTimer=setTimeout(()=>{
+    if(preferredQuality==='auto' && current && streamIdx+1<current.streams.length){
+      streamIdx++; updateStreamSel();
+      setStatus('Slow network: reducing quality…','loading');
+      playStream(current.streams[streamIdx]);
+    }
+    stallTimer=null;
+  },3000);
+});
+video.addEventListener('playing',()=>{$('#spinner').style.display='none';
+  if(stallTimer){ clearTimeout(stallTimer); stallTimer=null; }
+});
 $('#muteBtn').onclick=()=>{ video.muted=!video.muted; $('#muteBtn').textContent=video.muted?'🔇':'🔊'; };
 $('#vol').oninput=e=>{ video.volume=parseFloat(e.target.value); video.muted=video.volume===0; $('#muteBtn').textContent=video.muted?'🔇':'🔊'; };
 $('#reloadBtn').onclick=()=>{ if(current) play(current); };
@@ -553,14 +625,41 @@ $('#favFilter').onclick=()=>{
 $('#fsBtn').onclick=()=>toggleFs();
 $('#fsBtn2').onclick=()=>toggleFs();
 $('#toggleList').onclick=()=>$('#sidebar').classList.toggle('open');
+function isFs(){
+  return !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement|| (video && video.webkitDisplayingFullscreen));
+}
+function requestFs(el){
+  if(el.requestFullscreen) return el.requestFullscreen();
+  if(el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
+  if(el.mozRequestFullScreen) return el.mozRequestFullScreen();
+  if(el.msRequestFullscreen) return el.msRequestFullscreen();
+  if(video&&video.webkitEnterFullscreen) return video.webkitEnterFullscreen();
+}
+function exitFs(){
+  if(document.exitFullscreen) return document.exitFullscreen();
+  if(document.webkitExitFullscreen) return document.webkitExitFullscreen();
+  if(document.mozCancelFullScreen) return document.mozCancelFullScreen();
+  if(document.msExitFullscreen) return document.msExitFullscreen();
+  if(video&&video.webkitExitFullscreen) return video.webkitExitFullscreen();
+}
+function updateFsUI(){
+  $('#fsBtn').textContent=isFs()?'Exit full screen':'Full screen';
+  if(!isFs()) { try{ showCtrl(); }catch(e){} }
+}
 function toggleFs(){
   const el=$('#wrap');
-  if(!document.fullscreenElement){ el.requestFullscreen?.(); }
-  else { document.exitFullscreen?.(); }
+  try{
+    if(isFs()){ const p=exitFs(); if(p&&p.catch) p.catch(()=>{}); }
+    else { const p=requestFs(el); if(p&&p.catch) p.catch(()=>{}); }
+  }catch(e){}
 }
-document.addEventListener('fullscreenchange',()=>{
-  $('#fsBtn').textContent=document.fullscreenElement?'Exit full screen':'Full screen';
-});
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(ev=>document.addEventListener(ev,updateFsUI));
+if(video){
+  video.addEventListener('webkitbeginfullscreen',updateFsUI);
+  video.addEventListener('webkitendfullscreen',updateFsUI);
+}
+window.addEventListener('resize',updateFsUI);
+document.addEventListener('visibilitychange',updateFsUI);
 document.addEventListener('keydown',e=>{
   const el=e.target;
   const typing=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);
@@ -585,6 +684,17 @@ $('#search').addEventListener('input',renderList);
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),2200); }
 
 // ---------- boot ----------
+const pq=$('#prefQuality');
+if(pq){ pq.value=preferredQuality; pq.onchange=e=>{
+  preferredQuality=e.target.value;
+  try{ localStorage.setItem('prefQuality',preferredQuality); }catch{}
+  if(current){
+    streamIdx=bestStreamIndex(current,preferredQuality);
+    updateStreamSel();
+    setStatus('Loading stream…','loading');
+    playStream(current.streams[streamIdx]);
+  }
+}; }
 loadChannels();
 </script>
 </body>
